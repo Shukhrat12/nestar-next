@@ -6,6 +6,7 @@ import { getMainDefinition } from '@apollo/client/utilities';
 import { onError } from '@apollo/client/link/error';
 import { getJwtToken } from '../libs/auth';
 import { TokenRefreshLink } from 'apollo-link-token-refresh';
+
 let apolloClient: ApolloClient<NormalizedCacheObject>;
 
 function getHeaders() {
@@ -20,9 +21,8 @@ const tokenRefreshLink = new TokenRefreshLink({
 	accessTokenField: 'accessToken',
 	isTokenValidOrUndefined: () => {
 		return true;
-	}, // @ts-ignore
+	},// @ts-ignore
 	fetchAccessToken: () => {
-		// execute refresh token
 		return null;
 	},
 });
@@ -40,14 +40,12 @@ function createIsomorphicLink() {
 			return forward(operation);
 		});
 
-		// @ts-ignore
-		const link = new createUploadLink({
-			uri: process.env.REACT_APP_API_GRAPHQL_URL,
+		const link = createUploadLink({
+			uri: process.env.REACT_APP_API_GRAPHQL_URL ?? 'http://localhost:3007/graphql', // Fallback URL for local development
 		});
 
-		/* WEBSOCKET SUBSCRIPTION LINK */
 		const wsLink = new WebSocketLink({
-			uri: process.env.REACT_APP_API_WS ?? 'ws://127.0.0.1:3007',
+			uri: process.env.REACT_APP_API_WS ?? 'ws://localhost:3007/graphql',
 			options: {
 				reconnect: false,
 				timeout: 30000,
@@ -57,16 +55,13 @@ function createIsomorphicLink() {
 			},
 		});
 
-		const errorLink = onError(({ graphQLErrors, networkError, response }) => {
+		const errorLink = onError(({ graphQLErrors, networkError }) => {
 			if (graphQLErrors) {
-				graphQLErrors.map(({ message, locations, path, extensions }) =>
+				graphQLErrors.map(({ message, locations, path }) =>
 					console.log(`[GraphQL error]: Message: ${message}, Location: ${locations}, Path: ${path}`),
 				);
 			}
 			if (networkError) console.log(`[Network error]: ${networkError}`);
-			// @ts-ignore
-			if (networkError?.statusCode === 401) {
-			}
 		});
 
 		const splitLink = split(
@@ -79,6 +74,10 @@ function createIsomorphicLink() {
 		);
 
 		return from([errorLink, tokenRefreshLink, splitLink]);
+	} else {
+		return createUploadLink({
+			uri: process.env.REACT_APP_API_GRAPHQL_URL ?? 'http://localhost:3007/graphql',
+		});
 	}
 }
 
@@ -103,20 +102,3 @@ export function initializeApollo(initialState = null) {
 export function useApollo(initialState: any) {
 	return useMemo(() => initializeApollo(initialState), [initialState]);
 }
-
-/**
-import { ApolloClient, InMemoryCache, createHttpLink } from "@apollo/client";
-
-// No Subscription required for develop process
-
-const httpLink = createHttpLink({
-  uri: "http://localhost:3007/graphql",
-});
-
-const client = new ApolloClient({
-  link: httpLink,
-  cache: new InMemoryCache(),
-});
-
-export default client;
-*/
