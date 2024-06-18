@@ -6,7 +6,6 @@ import { getMainDefinition } from '@apollo/client/utilities';
 import { onError } from '@apollo/client/link/error';
 import { getJwtToken } from '../libs/auth';
 import { TokenRefreshLink } from 'apollo-link-token-refresh';
-
 let apolloClient: ApolloClient<NormalizedCacheObject>;
 
 function getHeaders() {
@@ -21,8 +20,9 @@ const tokenRefreshLink = new TokenRefreshLink({
 	accessTokenField: 'accessToken',
 	isTokenValidOrUndefined: () => {
 		return true;
-	},// @ts-ignore
+	}, // @ts-ignore
 	fetchAccessToken: () => {
+		// execute refresh token
 		return null;
 	},
 });
@@ -40,12 +40,14 @@ function createIsomorphicLink() {
 			return forward(operation);
 		});
 
-		const link = createUploadLink({
-			uri: process.env.REACT_APP_API_GRAPHQL_URL ?? 'http://localhost:3007/graphql', // Fallback URL for local development
+		// @ts-ignore
+		const link = new createUploadLink({
+			uri: process.env.REACT_APP_API_GRAPHQL_URL,
 		});
 
+		/* WEBSOCKET SUBSCRIPTION LINK */
 		const wsLink = new WebSocketLink({
-			uri: process.env.REACT_APP_API_WS ?? 'ws://localhost:3007/graphql',
+			uri: process.env.REACT_APP_API_WS ?? 'ws://127.0.0.1:3007',
 			options: {
 				reconnect: false,
 				timeout: 30000,
@@ -55,13 +57,16 @@ function createIsomorphicLink() {
 			},
 		});
 
-		const errorLink = onError(({ graphQLErrors, networkError }) => {
+		const errorLink = onError(({ graphQLErrors, networkError, response }) => {
 			if (graphQLErrors) {
-				graphQLErrors.map(({ message, locations, path }) =>
+				graphQLErrors.map(({ message, locations, path, extensions }) =>
 					console.log(`[GraphQL error]: Message: ${message}, Location: ${locations}, Path: ${path}`),
 				);
 			}
 			if (networkError) console.log(`[Network error]: ${networkError}`);
+			// @ts-ignore
+			if (networkError?.statusCode === 401) {
+			}
 		});
 
 		const splitLink = split(
@@ -74,10 +79,6 @@ function createIsomorphicLink() {
 		);
 
 		return from([errorLink, tokenRefreshLink, splitLink]);
-	} else {
-		return createUploadLink({
-			uri: process.env.REACT_APP_API_GRAPHQL_URL ?? 'http://localhost:3007/graphql',
-		});
 	}
 }
 
