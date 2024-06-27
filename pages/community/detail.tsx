@@ -5,7 +5,7 @@ import useDeviceDetect from '../../libs/hooks/useDeviceDetect';
 import withLayoutBasic from '../../libs/components/layout/LayoutBasic';
 import { Button, Stack, Typography, Tab, Tabs, IconButton, Backdrop, Pagination } from '@mui/material';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
-import { useQuery, useReactiveVar } from '@apollo/client';
+import { useMutation, useQuery, useReactiveVar } from '@apollo/client';
 import Moment from 'react-moment';
 import { userVar } from '../../apollo/store';
 import ThumbUpOffAltIcon from '@mui/icons-material/ThumbUpOffAlt';
@@ -13,15 +13,27 @@ import ThumbUpAltIcon from '@mui/icons-material/ThumbUpAlt';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import ChatIcon from '@mui/icons-material/Chat';
 import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineRounded';
-import { CommentsInquiry } from '../../libs/types/comment/comment.input';
+import { CommentInput, CommentsInquiry } from '../../libs/types/comment/comment.input';
 import { Comment } from '../../libs/types/comment/comment';
 import dynamic from 'next/dynamic';
-import { CommentStatus } from '../../libs/enums/comment.enum';
+import { CommentGroup, CommentStatus } from '../../libs/enums/comment.enum';
 import { T } from '../../libs/types/common';
 import EditIcon from '@mui/icons-material/Edit';
 import { serverSideTranslations } from 'next-i18next/serverSideTranslations';
 import { BoardArticle } from '../../libs/types/board-article/board-article';
-import { GET_AGENTS } from '../../apollo/user/query';
+import { GET_AGENTS, GET_BOARD_ARTICLE } from '../../apollo/user/query';
+import { CREATE_COMMENT, LIKE_TARGET_BOARD_ARTICLE, UPDATE_COMMENT } from '../../apollo/user/mutation';
+import { GET_COMMENTS } from '../../apollo/admin/query';
+import { Message } from '@mui/icons-material';
+import {
+	sweetConfirmAlert,
+	sweetMixinErrorAlert,
+	sweetMixinSuccessAlert,
+	sweetTopSmallSuccessAlert,
+} from '../../libs/sweetAlert';
+import { Messages } from '../../libs/config';
+import { CommentUpdate } from '../../libs/types/comment/comment.update';
+
 const ToastViewerComponent = dynamic(() => import('../../libs/components/community/TViewer'), { ssr: false });
 
 export const getStaticProps = async ({ locale }: any) => ({
@@ -58,21 +70,39 @@ const CommunityDetail: NextPage = ({ initialInput, ...props }: T) => {
 	const [boardArticle, setBoardArticle] = useState<BoardArticle>();
 
 	/** APOLLO REQUESTS **/
+	const [likeTargetBoardArticle] = useMutation(LIKE_TARGET_BOARD_ARTICLE);
+	const [createComment] = useMutation(CREATE_COMMENT);
+	const [updateComment] = useMutation(UPDATE_COMMENT);
 
 	const {
-		loading: getArticlesLoading,
-		data: getArticlesData,
-		error: getArticlesError,
-		refetch: getArticlesRefetch,
-	} = useQuery(GET_AGENTS, {
+		loading: boardArticleLoading,
+		data: boardArticlesData,
+		error: boardArticlesError,
+		refetch: boardArticlesRefetch,
+	} = useQuery(GET_BOARD_ARTICLE, {
 		fetchPolicy: 'network-only',
 		variables: { input: articleId },
 		notifyOnNetworkStatusChange: true,
 		onCompleted: (data: T) => {
-			if (data?.getProperty) {
-				setBoardArticle(data?.getProperty);
-				setSlideImage(data?.getProperty?.propertyImages[0]);
+			setBoardArticle(data?.getBoardArticle);
+			if (data?.getBoardArticle?.memberData?.memberImage) {
+				setMemberImage(`${process.env.REACT_APP_API_URL}/${data?.getBoardArticle?.memberData?.memberImage}`);
 			}
+		},
+	});
+
+	const {
+		loading: getCommentsLoading,
+		data: getCommentsData,
+		error: getCommentsError,
+		refetch: getCommentsRefetch,
+	} = useQuery(GET_COMMENTS, {
+		fetchPolicy: 'cache-and-network',
+		variables: { input: searchFilter },
+		notifyOnNetworkStatusChange: true,
+		onCompleted: (data: T) => {
+			setComments(data?.getBoardArticle);
+			setTotal(data.getComments?.metaCounter?.[0]?.total || 0);
 		},
 	});
 
@@ -82,6 +112,26 @@ const CommunityDetail: NextPage = ({ initialInput, ...props }: T) => {
 	}, [articleId]);
 
 	/** HANDLERS **/
+	const likeBoArticleHandler = async (user: T, id: any) => {
+		try {
+			if (likeLoading) return;
+			if (!id) return;
+			if (!user._id) throw new Error(Messages.error2);
+
+			setLikeLoading(true);
+
+			await likeTargetBoardArticle({
+				variables: { input: id },
+			});
+			await boardArticlesRefetch({ input: id });
+
+			await sweetTopSmallSuccessAlert('success', 800);
+		} catch (error: any) {
+			console.log('ERROR, likePropertyHandler: ', error.message);
+			sweetMixinErrorAlert(error.message).then();
+		}
+	};
+
 	const tabChangeHandler = (event: React.SyntheticEvent, value: string) => {
 		router.replace(
 			{
@@ -93,9 +143,70 @@ const CommunityDetail: NextPage = ({ initialInput, ...props }: T) => {
 		);
 	};
 
-	const creteCommentHandler = async () => {};
+	const creteCommentHandler = async () => {
+		if (!comment) return;
+		try {
+			if (!user?._id) throw new Error(Messages.error2);
+			const commentInput: CommentInput = {
+				commentGroup: CommentGroup.ARTICLE,
+				commentRefId: articleId,
+				commentContent: comment,
+			};
 
-	const updateButtonHandler = async (commentId: string, commentStatus?: CommentStatus.DELETE) => {};
+			await createComment({
+				variables: {
+					input: commentInput,
+				},
+			});
+			await getCommentsRefetch({ input: searchFilter });
+			await boardArticlesRefetch({ input: articleId });
+			setComment('');
+			await sweetMixinSuccessAlert('Successfully submitted!');
+		} catch (error: any) {
+			await sweetMixinErrorAlert(error.message);
+		}
+	};
+
+	const updateButtonHandler = async (commentId: string, commentStatus?: CommentStatus.DELETE) => {
+		try {
+			if (!comment) throw new Error('Please select a comment to update!');
+			if (!user?._id) throw new Error(Messages.error2);
+			if (updatedComment === comments?.find((comment) => comment?._id === commentId)?.commentContent) return;
+
+			const updateData: CommentUpdate = {
+				_id: commentId,
+				...(commentStatus && { commentStatus: commentStatus }),
+				...(updatedComment && { commentContent: updatedComment }),
+			};
+
+			if (!updateData?.commentContent && !updateData?.commentStatus)
+				throw new Error('Please provide data to update your comment!');
+
+			if (commentStatus) {
+				if (await sweetConfirmAlert('Do you really want to delete the comment?')) {
+					await updateComment({
+						variables: {
+							input: updateData,
+						},
+					});
+					await sweetMixinSuccessAlert('Successfully deleted!');
+				} else return;
+			} else {
+				await updateComment({
+					variables: {
+						input: updateData,
+					},
+				});
+				await sweetMixinSuccessAlert('Successfully updated!');
+			}
+
+			await getCommentsRefetch({ input: searchFilter });
+			await boardArticlesRefetch({ input: articleId });
+			await sweetMixinSuccessAlert('Successfully submitted!');
+		} catch (error: any) {
+			await sweetMixinErrorAlert(error.message);
+		}
+	};
 
 	const getCommentMemberImage = (imageUrl: string | undefined) => {
 		if (imageUrl) return `${process.env.REACT_APP_API_URL}/${imageUrl}`;
@@ -213,7 +324,11 @@ const CommunityDetail: NextPage = ({ initialInput, ...props }: T) => {
 										</Stack>
 										<Stack className="info">
 											<Stack className="icon-info">
-												{boardArticle?.meLiked ? <ThumbUpAltIcon /> : <ThumbUpOffAltIcon />}
+												{boardArticle?.meLiked ? (
+													<ThumbUpAltIcon onClick={() => likeBoArticleHandler(user, boardArticle?._id)} />
+												) : (
+													<ThumbUpOffAltIcon />
+												)}
 
 												<Typography className="text">{boardArticle?.articleLikes}</Typography>
 											</Stack>
